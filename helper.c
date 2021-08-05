@@ -33,16 +33,62 @@ enum buffer_status buffer_send(state_t *buffer, void* data)
     }
     pthread_mutex_unlock(&(buffer->chclose));
     
+    pthread_mutex_lock(&(buffer->chmutex));
     int msg_size = get_msg_size(data);
     if(fifo_avail_size(buffer->fifoQ) > msg_size )
     {
+        pthread_mutex_lock(&(buffer->chclose));
+        if(!buffer->isopen)
+        {
+            pthread_cond_broadcast(&(buffer->chconrec));
+            pthread_cond_broadcast(&(buffer->chconsend));
+            pthread_mutex_unlock(&(buffer->chclose));
+            pthread_mutex_unlock(&(buffer->chmutex));
+            return CLOSED_ERROR;
+        }
+        pthread_mutex_unlock(&(buffer->chclose));
         
-        pthread_mutex_lock(&(buffer->chmutex));
-	    buffer_add_Q(buffer,data);
+        buffer_add_Q(buffer,data);
+        pthread_cond_broadcast(&(buffer->chconrec));
         pthread_mutex_unlock(&(buffer->chmutex));
-    	return BUFFER_SUCCESS;	
+    	return BUFFER_SUCCESS;
+        	
     }
     else
+    {
+        while(!(fifo_avail_size(buffer->fifoQ) > msg_size))
+        {
+            pthread_mutex_lock(&(buffer->chclose));
+            if(!buffer->isopen)
+            {
+                pthread_cond_broadcast(&(buffer->chconrec));
+                pthread_cond_broadcast(&(buffer->chconsend));
+                pthread_mutex_unlock(&(buffer->chclose));
+                pthread_mutex_unlock(&(buffer->chmutex));
+                return CLOSED_ERROR;
+            }
+            pthread_mutex_unlock(&(buffer->chclose));
+            
+            pthread_cond_wait(&(buffer->chconsend), &(buffer->chmutex));
+        }
+
+        pthread_mutex_lock(&(buffer->chclose));
+        if(!buffer->isopen)
+        {
+            pthread_cond_broadcast(&(buffer->chconrec));
+            pthread_cond_broadcast(&(buffer->chconsend));
+            pthread_mutex_unlock(&(buffer->chclose));
+            pthread_mutex_unlock(&(buffer->chmutex));
+            return CLOSED_ERROR;
+        }
+        pthread_mutex_unlock(&(buffer->chclose));
+        
+        buffer_add_Q(buffer,data);
+        pthread_cond_broadcast(&(buffer->chconrec));
+        pthread_mutex_unlock(&(buffer->chmutex));
+    	return BUFFER_SUCCESS;
+
+    }
        return BUFFER_ERROR;
 }
 // test_send_correctness 1
@@ -56,24 +102,79 @@ enum buffer_status buffer_send(state_t *buffer, void* data)
 
 enum buffer_status buffer_receive(state_t* buffer, void** data)
 {
-
+    pthread_mutex_lock(&(buffer->chclose));
     if(!buffer->isopen)
     {
+        pthread_mutex_unlock(&(buffer->chclose));
         return CLOSED_ERROR;
     }
+    pthread_mutex_unlock(&(buffer->chclose));
+
+    pthread_mutex_lock(&(buffer->chmutex)); 
     if(buffer->fifoQ->avilSize < buffer->fifoQ->size)  // checking if there is something in the Q to remove
     {
-        pthread_mutex_lock(&(buffer->chmutex));
-    	buffer_remove_Q(buffer,data);
+        pthread_mutex_lock(&(buffer->chclose));
+        if(!buffer->isopen)
+        {
+            pthread_cond_broadcast(&(buffer->chconrec));
+            pthread_cond_broadcast(&(buffer->chconsend));
+            pthread_mutex_unlock(&(buffer->chclose));
+            pthread_mutex_unlock(&(buffer->chmutex));
+            return CLOSED_ERROR;
+        }
+        pthread_mutex_unlock(&(buffer->chclose));
+
+        buffer_remove_Q(buffer,data);
     	if(strcmp(*(char**)(data),"splmsg") ==0)
     	{
+            pthread_cond_broadcast(&(buffer->chconsend));
             pthread_mutex_unlock(&(buffer->chmutex));
         	return BUFFER_SPECIAL_MESSSAGE;
     	}
+        pthread_cond_broadcast(&(buffer->chconsend));
         pthread_mutex_unlock(&(buffer->chmutex));
     	return BUFFER_SUCCESS;
     }
     else
+    {
+        while(!(buffer->fifoQ->avilSize < buffer->fifoQ->size))
+        {
+            pthread_mutex_lock(&(buffer->chclose));
+            if(!buffer->isopen)
+            {
+                pthread_cond_broadcast(&(buffer->chconrec));
+                pthread_cond_broadcast(&(buffer->chconsend));
+                pthread_mutex_unlock(&(buffer->chclose));
+                pthread_mutex_unlock(&(buffer->chmutex));
+                return CLOSED_ERROR;
+            }
+            pthread_mutex_unlock(&(buffer->chclose));
+           
+            pthread_cond_wait(&(buffer->chconrec), &(buffer->chmutex));
+        }
+        
+        pthread_mutex_lock(&(buffer->chclose));
+        if(!buffer->isopen)
+        {
+            pthread_cond_broadcast(&(buffer->chconrec));
+            pthread_cond_broadcast(&(buffer->chconsend));
+            pthread_mutex_unlock(&(buffer->chclose));
+            pthread_mutex_unlock(&(buffer->chmutex));
+            return CLOSED_ERROR;
+        }
+        pthread_mutex_unlock(&(buffer->chclose));
+        
+    	buffer_remove_Q(buffer,data);
+    	if(strcmp(*(char**)(data),"splmsg") ==0)
+    	{
+            pthread_cond_broadcast(&(buffer->chconsend));
+            pthread_mutex_unlock(&(buffer->chmutex));
+        	return BUFFER_SPECIAL_MESSSAGE;
+    	}
+        pthread_cond_broadcast(&(buffer->chconsend));
+        pthread_mutex_unlock(&(buffer->chmutex));
+    	return BUFFER_SUCCESS;
+    }
         return BUFFER_ERROR;
     
 }
@@ -86,11 +187,18 @@ enum buffer_status buffer_receive(state_t* buffer, void** data)
 // BUFFER_ERROR in any other error case
 enum buffer_status buffer_close(state_t* buffer)
 {
+    pthread_mutex_lock(&(buffer->chclose));
     if(!buffer->isopen)
     {
+         pthread_mutex_unlock(&(buffer->chclose));
         return CLOSED_ERROR;
     }
+    
     buffer->isopen = false;
+    pthread_cond_broadcast(&(buffer->chconrec));
+    pthread_cond_broadcast(&(buffer->chconsend));
+
+    pthread_mutex_unlock(&(buffer->chclose));
     return BUFFER_SUCCESS;
     
 }
@@ -103,15 +211,18 @@ enum buffer_status buffer_close(state_t* buffer)
 
 enum buffer_status buffer_destroy(state_t* buffer)
 {
-    
+    pthread_mutex_lock(&(buffer->chclose));
     if(buffer->isopen)
     {
         return DESTROY_ERROR;
     }
+    pthread_mutex_unlock(&(buffer->chclose));
+    
     fifo_free(buffer->fifoQ);
     pthread_mutex_destroy(&(buffer->chmutex));
     pthread_cond_destroy(&(buffer->chconsend));
     pthread_cond_destroy(&(buffer->chconrec));
+     pthread_mutex_destroy(&(buffer->chclose));
     free(buffer);
     return BUFFER_SUCCESS;
 }
