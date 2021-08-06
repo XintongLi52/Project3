@@ -89,7 +89,7 @@ enum buffer_status buffer_send(state_t *buffer, void* data)
     	return BUFFER_SUCCESS;
 
     }
-       return BUFFER_ERROR;
+       //return BUFFER_ERROR;
 }
 // test_send_correctness 1
 // Reads data from the given buffer and stores it in the function’s input parameter, data (Note that it is a double pointer).
@@ -111,7 +111,7 @@ enum buffer_status buffer_receive(state_t* buffer, void** data)
     pthread_mutex_unlock(&(buffer->chclose));
 
     pthread_mutex_lock(&(buffer->chmutex)); 
-    if(buffer->fifoQ->avilSize < buffer->fifoQ->size)  // checking if there is something in the Q to remove
+    if(buffer->fifoQ->avilSize < buffer->fifoQ->size)  
     {
         pthread_mutex_lock(&(buffer->chclose));
         if(!buffer->isopen)
@@ -163,7 +163,7 @@ enum buffer_status buffer_receive(state_t* buffer, void** data)
             return CLOSED_ERROR;
         }
         pthread_mutex_unlock(&(buffer->chclose));
-        
+
     	buffer_remove_Q(buffer,data);
     	if(strcmp(*(char**)(data),"splmsg") ==0)
     	{
@@ -175,7 +175,7 @@ enum buffer_status buffer_receive(state_t* buffer, void** data)
         pthread_mutex_unlock(&(buffer->chmutex));
     	return BUFFER_SUCCESS;
     }
-        return BUFFER_ERROR;
+        //return BUFFER_ERROR;
     
 }
 
@@ -220,9 +220,10 @@ enum buffer_status buffer_destroy(state_t* buffer)
     
     fifo_free(buffer->fifoQ);
     pthread_mutex_destroy(&(buffer->chmutex));
-    pthread_cond_destroy(&(buffer->chconsend));
+    pthread_mutex_destroy(&(buffer->chclose));
     pthread_cond_destroy(&(buffer->chconrec));
-     pthread_mutex_destroy(&(buffer->chclose));
+    pthread_cond_destroy(&(buffer->chconsend));
+    
     free(buffer);
     return BUFFER_SUCCESS;
 }
